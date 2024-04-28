@@ -6,6 +6,7 @@
 #include <dirent.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <fcntl.h> 
 
 #define BUFFER_SIZE 1024
 
@@ -29,7 +30,7 @@ void remove_directory(const char *path) {
             }
         }
         closedir(dir);
-        printf("removed directory '%s'\n", path);
+        printf("removed directory '%s'\n\n", path);
         rmdir(path);
     }
 }
@@ -113,7 +114,6 @@ int count_files(const char *source_dir) {
 int main() {
     char source_dir[BUFFER_SIZE], backup_dir[BUFFER_SIZE];
     printf("---------------------PROCESOS BACKUP-------------------\n");
-    printf("Comunicacion y sincronizacion de procesos → Respaldo de archivos\n\n");
     printf("Ingrese el directorio fuente: ");
     scanf("%s", source_dir);
     printf("Ingrese el directorio destino (respaldo): ");
@@ -123,11 +123,12 @@ int main() {
     remove_directory(backup_dir);
     printf("Padre(pid=%d): creando directorio de respaldo...\n", getpid());
     create_backup_directory(backup_dir);
-
     int num_files = count_files(source_dir);
+    printf("Padre(pid=%d): Hola hijo, realiza el respaldo de %d archivos \n", getpid(),num_files);
     printf("======= RESPALDANDO %d ARCHIVOS ======\n", num_files);
 
-    if (pipe(fd) < 0) {
+    int pipe_fd[2];
+    if (pipe(pipe_fd) == -1) {
         perror("Error al crear el pipe");
         exit(EXIT_FAILURE);
     }
@@ -139,35 +140,64 @@ int main() {
     }
 
     if (pid > 0) {  // Código del padre
-        close(fd[0]);  // Cerrar lado de lectura en el padre
+        close(pipe_fd[1]);  // Cerrar lado de escritura en el padre
 
-        // Enviar mensaje inicial al hijo
-        char msg[] = "Hola hijo, realiza el respaldo de archivos";
-        write(fd[1], msg, strlen(msg) + 1);
-        close(fd[1]);  // Cerrar lado de escritura después de enviar
-
-        // Esperar que el hijo termine
-        int status;
-        waitpid(pid, &status, 0);
-
-        // Leer mensaje final del hijo
-        char final_msg[BUFFER_SIZE];
-        read(fd[0], final_msg, BUFFER_SIZE);
-        printf("Padre(pid=%d), mensaje del hijo: %s\n", getpid(), final_msg);
-
-        if (WIFEXITED(status)) {
-            printf("Padre(pid=%d): Termina el proceso hijo con estado %d\n", getpid(), WEXITSTATUS(status));
+        char msg_from_child[BUFFER_SIZE];
+        ssize_t bytes_read = read(pipe_fd[0], msg_from_child, BUFFER_SIZE);
+        if (bytes_read < 0) {
+            perror("Error al leer del pipe");
+            exit(EXIT_FAILURE);
         }
+        printf("Padre(pid=%d), mensaje del hijo: %s\n", getpid(), msg_from_child);
+
+        // Esperar a que el hijo termine
+        wait(NULL);
 
         printf("Padre(pid=%d) comprobando respaldo:\n", getpid());
+        printf("===================================================\n");
         system("ls -l respaldo");
         printf("%d\nARCHIVOS RESPALDADOS\n", num_files);
 
-        printf("====================\nTermino el proceso padre...\n");
+        printf("===================================================\nTermino el proceso padre...\n");
     } else {  // Código del hijo
+        close(pipe_fd[0]);  // Cerrar lado de lectura en el hijo
+
+        // Realizar el respaldo
         backup_files(source_dir, backup_dir, num_files);
+
+        // Enviar mensaje al padre
+        char final_msg[] = "Adios padre, termine el respaldo...";
+        ssize_t bytes_written = write(pipe_fd[1], final_msg, strlen(final_msg) + 1);
+        if (bytes_written < 0) {
+            perror("Error al escribir en el pipe");
+            exit(EXIT_FAILURE);
+        }
+        close(pipe_fd[1]);  // Cerrar lado de escritura después de enviar
+
         exit(EXIT_SUCCESS);
     }
+
+
+        // Creando txt
+        char *arch = backup_dir;
+
+        // Comando para listar los archivos y guardarlos en un archivo
+        char command[1024];
+        sprintf(command, "ls %s > archivosRespaldados.txt", arch);
+        system(command);
+
+        // Comando para contar los archivos y añadir el total al archivo de texto
+        sprintf(command, "echo 'Total de archivos: $(ls %s | wc -l)' >> archivosRespaldados.txt", arch);
+
+        // Comando bash con seguridad mejorada para evitar desbordamiento de búfer
+        char *bash = malloc(strlen(command) + 20);  // Alocar memoria suficiente dinámicamente
+        if (bash == NULL) {
+            fprintf(stderr, "Error al alocar memoria.\n");
+            return 1;  // Terminar programa si no se puede alocar memoria
+        }
+        sprintf(bash, "bash -c \"%s\"", command);
+        system(bash);
+        free(bash);  // Liberar la memoria alocada
 
     return 0;
 }
