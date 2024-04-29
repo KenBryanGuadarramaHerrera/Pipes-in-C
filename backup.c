@@ -1,3 +1,6 @@
+//Guadarrama Herrera Ken Bryan
+//Silverio Martinez Andres
+
 #include <stdio.h>    
 #include <stdlib.h>    
 #include <unistd.h>   
